@@ -1,14 +1,9 @@
 import streamlit as st
-from mistralai import Mistral
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
-# Initialize Mistral client
-api_key = os.getenv("MISTRAL_API_KEY")
-client = Mistral(api_key=api_key)
 
 # Streamlit page configuration
 st.set_page_config(
@@ -37,6 +32,26 @@ Always be helpful, professional, and follow banking compliance guidelines.
 If you don't know something, direct the customer to contact their bank directly.
 Never ask for sensitive information like passwords or full card numbers."""
 
+# Get API key
+api_key = os.getenv("MISTRAL_API_KEY")
+
+if not api_key:
+    st.error("❌ MISTRAL_API_KEY not found. Please set your API key in the .env file or Streamlit secrets.")
+    st.info("For Streamlit Cloud, go to Settings → Secrets and add: MISTRAL_API_KEY=your_key")
+    st.stop()
+
+# Initialize Mistral client
+try:
+    from mistralai.client import MistralClient
+    client = MistralClient(api_key=api_key)
+except ImportError:
+    try:
+        from mistralai import Mistral
+        client = Mistral(api_key=api_key)
+    except ImportError:
+        st.error("❌ Mistral AI library not installed. Run: pip install mistralai")
+        st.stop()
+
 # Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -53,22 +68,33 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Prepare messages for API with system message
-    messages = [{"role": "user", "content": SYSTEM_PROMPT}] + \
-               [{"role": msg["role"], "content": msg["content"]} 
-                for msg in st.session_state.messages]
-
     # Get response from Mistral
     with st.spinner("Banking Assistant is thinking..."):
         try:
-            response = client.chat(
-                model="mistral-large-latest",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=1024
-            )
+            # Prepare messages for API
+            messages = [{"role": msg["role"], "content": msg["content"]} 
+                       for msg in st.session_state.messages]
 
-            assistant_message = response.choices[0].message.content
+            # Try with new Mistral API format
+            try:
+                response = client.chat.complete(
+                    model="mistral-large-latest",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        *messages
+                    ]
+                )
+                assistant_message = response.choices[0].message.content
+            except AttributeError:
+                # Fallback to older API format
+                response = client.chat(
+                    model="mistral-large-latest",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        *messages
+                    ]
+                )
+                assistant_message = response.choices[0].message.content
 
             # Add assistant message to session state
             st.session_state.messages.append({"role": "assistant", "content": assistant_message})
@@ -78,7 +104,8 @@ if user_input:
                 st.markdown(assistant_message)
 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"❌ Error: {str(e)}")
+            st.info("Make sure your MISTRAL_API_KEY is valid and has sufficient credits.")
 
 # Sidebar with information
 with st.sidebar:
@@ -94,6 +121,13 @@ with st.sidebar:
 
     **Note:** This is an AI assistant. For sensitive transactions or account changes, 
     please contact your bank directly.
+    """)
+
+    st.markdown("### 🔧 Info")
+    st.markdown(f"""
+    **API Status:** {'✅ Connected' if api_key else '❌ Not Connected'}
+    **Model:** Mistral Large
+    **Messages:** {len(st.session_state.messages)}
     """)
 
     if st.button("Clear Chat History"):
